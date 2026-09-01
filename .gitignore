@@ -1,0 +1,21 @@
+# Build outputs
+bin/
+obj/
+publish/
+
+# Visual Studio / Rider cache
+.vs/
+.idea/
+*.user
+*.suo
+
+# Test results
+TestResults/
+*.trx
+
+# Local tooling state (never commit secrets or machine-specific state)
+*.DotSettings.user
+
+# OS noise
+Thumbs.db
+Desktop.ini

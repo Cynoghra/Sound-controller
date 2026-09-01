@@ -1,0 +1,88 @@
+<Window x:Class="SoundController.UI.SettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="SoundController Settings"
+        Width="620"
+        SizeToContent="Height"
+        ResizeMode="NoResize"
+        WindowStartupLocation="CenterScreen"
+        Background="{StaticResource WindowBackgroundBrush}"
+        Foreground="{StaticResource TextPrimaryBrush}">
+    <StackPanel Margin="14">
+
+        <CheckBox x:Name="AutoRestoreCheckBox"
+                  Content="Auto-restore locked devices when something changes"
+                  Margin="0,0,0,6" />
+        <CheckBox x:Name="StartWithWindowsCheckBox"
+                  Content="Start with Windows"
+                  Margin="0,0,0,12" />
+
+        <GroupBox Header="Windows default devices" Margin="0,0,0,12" Padding="8">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="220" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <!-- "Default" writes both Console and Multimedia roles together,
+                     mirroring the Windows Settings UI. Communications is separate. -->
+                <TextBlock Grid.Row="0" Grid.Column="0" Style="{StaticResource DarkTextBlockStyle}" Text="Playback default:" VerticalAlignment="Center" />
+                <ComboBox x:Name="PlaybackDefaultComboBox" Grid.Row="0" Grid.Column="1" Margin="0,2" />
+                <TextBlock Grid.Row="1" Grid.Column="0" Style="{StaticResource DarkTextBlockStyle}" Text="Playback communications:" VerticalAlignment="Center" />
+                <ComboBox x:Name="PlaybackCommsComboBox" Grid.Row="1" Grid.Column="1" Margin="0,2" />
+                <TextBlock Grid.Row="2" Grid.Column="0" Style="{StaticResource DarkTextBlockStyle}" Text="Recording default:" VerticalAlignment="Center" />
+                <ComboBox x:Name="RecordingDefaultComboBox" Grid.Row="2" Grid.Column="1" Margin="0,2" />
+                <TextBlock Grid.Row="3" Grid.Column="0" Style="{StaticResource DarkTextBlockStyle}" Text="Recording communications:" VerticalAlignment="Center" />
+                <ComboBox x:Name="RecordingCommsComboBox" Grid.Row="3" Grid.Column="1" Margin="0,2" />
+            </Grid>
+        </GroupBox>
+
+        <GroupBox Header="Sonar Classic redirections" Margin="0,0,0,12" Padding="8">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="220" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <TextBlock Grid.Row="0" Grid.Column="0" Style="{StaticResource DarkTextBlockStyle}" Text="Game:" VerticalAlignment="Center" />
+                <ComboBox x:Name="GameComboBox" Grid.Row="0" Grid.Column="1" Margin="0,2" />
+                <TextBlock Grid.Row="1" Grid.Column="0" Style="{StaticResource DarkTextBlockStyle}" Text="Chat:" VerticalAlignment="Center" />
+                <ComboBox x:Name="ChatComboBox" Grid.Row="1" Grid.Column="1" Margin="0,2" />
+                <TextBlock Grid.Row="2" Grid.Column="0" Style="{StaticResource DarkTextBlockStyle}" Text="Media:" VerticalAlignment="Center" />
+                <ComboBox x:Name="MediaComboBox" Grid.Row="2" Grid.Column="1" Margin="0,2" />
+                <TextBlock Grid.Row="3" Grid.Column="0" Style="{StaticResource DarkTextBlockStyle}" Text="Aux:" VerticalAlignment="Center" />
+                <ComboBox x:Name="AuxComboBox" Grid.Row="3" Grid.Column="1" Margin="0,2" />
+                <TextBlock Grid.Row="4" Grid.Column="0" Style="{StaticResource DarkTextBlockStyle}" Text="Microphone:" VerticalAlignment="Center" />
+                <ComboBox x:Name="MicComboBox" Grid.Row="4" Grid.Column="1" Margin="0,2" />
+            </Grid>
+        </GroupBox>
+
+        <TextBlock x:Name="StatusText"
+                   Margin="0,0,0,10"
+                   Style="{StaticResource DarkTextBlockStyle}"
+                   Foreground="{StaticResource TextMutedBrush}"
+                   TextWrapping="Wrap"
+                   Text="Ready." />
+
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button x:Name="CaptureButton" Content="Capture current" Padding="10,4" Margin="0,0,6,0" Click="OnCaptureClicked" />
+            <Button x:Name="ApplyButton" Content="Apply now" Padding="10,4" Margin="0,0,6,0" Click="OnApplyClicked" />
+            <Button x:Name="SaveButton" Content="Save" Padding="10,4" Margin="0,0,6,0" IsDefault="True" Click="OnSaveClicked" />
+            <Button x:Name="CloseButton" Content="Close" Padding="10,4" IsCancel="True" Click="OnCloseClicked" />
+        </StackPanel>
+
+    </StackPanel>
+</Window>
