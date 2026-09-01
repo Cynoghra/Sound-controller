@@ -129,3 +129,23 @@ publish/           Single-file exe output (gitignored, produced by dotnet publis
 
 See `AGENTS.md` for project conventions and `TODO.md` for the current task
 list and what has not been hardware-verified yet.
+
+## Acknowledgments
+
+This project builds directly on the work of these open-source projects:
+
+- [Steelseries-NET-API](https://github.com/DataNext27/SteelSeries-NET-API) —
+  Sonar control, device discovery, and change events (MIT).
+- [H.NotifyIcon](https://github.com/HavenDV/H.NotifyIcon) — system tray icon
+  for WPF (MIT).
+- [NAudio](https://github.com/naudio/NAudio) — Windows audio endpoint
+  enumeration and notifications (MIT).
+- [AudioDeviceCmdlets](https://github.com/frgnca/AudioDeviceCmdlets) —
+  reference for Windows default-device switching (MIT).
+
+The four libraries above are MIT-licensed and used as dependencies.
+[SoundSwitch](https://github.com/Belphemur/SoundSwitch) and
+[AudioEndPointLibrary](https://github.com/Belphemur/AudioEndPointLibrary)
+(GPL-3.0) are credited as reference only - no code from them is included;
+they documented the undocumented `IPolicyConfig` COM interface this app's
+default-endpoint interop relies on.
