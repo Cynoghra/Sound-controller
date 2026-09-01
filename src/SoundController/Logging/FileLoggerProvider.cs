@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.IO;
 using Microsoft.Extensions.Logging;
 
@@ -44,7 +45,10 @@ public sealed class FileLoggerProvider : ILoggerProvider
                 Directory.CreateDirectory(_logDirectory);
                 string filePath = Path.Combine(_logDirectory, $"soundcontroller-{DateTime.Now:yyyyMMdd}.log");
 
+                // Invariant keeps log lines parseable regardless of the
+                // user's locale (date and number formatting).
                 string line = string.Format(
+                    CultureInfo.InvariantCulture,
                     "{0:yyyy-MM-dd HH:mm:ss.fff} [{1}] {2}: {3}",
                     DateTime.Now, logLevel, category, message);
                 if (exception is not null)

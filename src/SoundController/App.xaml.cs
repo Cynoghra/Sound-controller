@@ -1,4 +1,4 @@
-﻿using System.Threading;
+using System.Threading;
 using System.Windows;
 using System.Windows.Threading;
 using Microsoft.Extensions.DependencyInjection;
@@ -26,6 +26,12 @@ public partial class App : Application
     private bool _servicesDisposed;
     private TrayController? _tray;
     private SettingsWindow? _settingsWindow;
+
+    // Reused error list for the "cleanup service unavailable" fallback path.
+    private static readonly string[] CleanupUnavailableErrors =
+    [
+        "Cleanup service was unavailable; see logs (if they still exist).",
+    ];
 
     protected override async void OnStartup(StartupEventArgs e)
     {
@@ -111,7 +117,7 @@ public partial class App : Application
         logger.LogInformation("SoundController started");
     }
 
-    private async void OfferFirstRunCapture(RestoreCoordinator coordinator, ILogger<App> logger)
+    private static async void OfferFirstRunCapture(RestoreCoordinator coordinator, ILogger<App> logger)
     {
         var choice = MessageBox.Show(
             "No locked device state found.\n\nCapture the CURRENT audio devices (Sonar redirections and Windows defaults) as the locked state now?",
@@ -249,7 +255,7 @@ public partial class App : Application
 
         CleanupResult result = cleanup is not null
             ? cleanup.RemoveAllAppData()
-            : new CleanupResult(false, false, new[] { "Cleanup service was unavailable; see logs (if they still exist)." });
+            : new CleanupResult(false, false, CleanupUnavailableErrors);
 
         string message = result.FullyClean
             ? "Autostart entry removed and app data deleted.\nSoundController will now exit."
@@ -261,7 +267,6 @@ public partial class App : Application
 
         Shutdown();
     }
-
     /// <summary>Idempotent teardown of background services and the provider.</summary>
     private void DisposeServices()
     {

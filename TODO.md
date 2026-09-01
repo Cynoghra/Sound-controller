@@ -70,7 +70,9 @@ SoundController/
 
 - Auto-restore enabled toggle.
 - Sonar connection and protection status.
-- Capture current setup as locked.
+- Headphones / Speakers configuration toggle (switches the enforced
+  configuration and applies it immediately).
+- Capture current setup as locked (into the active configuration).
 - Apply saved setup now.
 - Open settings.
 - Start with Windows toggle.
@@ -104,6 +106,11 @@ display names are shown for readability, while endpoint IDs are persisted.
       hardware verification - requires plugging/unplugging real devices and a
       running SteelSeries GG; see Verification checklist below.)
 - [x] 13. Add the self-contained single-file publish profile and document use.
+- [x] 14. Add the Headphones/Speakers configuration toggle: two named
+      configurations with an active-profile pointer, schema v1 -> v2 settings
+      migration (legacy captured state becomes Headphones and stays active),
+      capture into the active configuration, tray radio toggle, and a
+      settings-window configuration selector with Make active.
 
 ## Verification
 
@@ -126,6 +133,7 @@ dotnet publish src/SoundController/SoundController.csproj -c Release -r win-x64 
 
 - Sonar Streamer-mode personal and stream mix support.
 - SteelSeries Moments, Engine, or general GG settings.
-- Multiple named profiles or automatic profile switching.
+- More than the fixed Headphones/Speakers pair, user-renameable profiles, or
+  automatic profile switching (for example by device plug events).
 - Automatically selecting an unconfigured fallback when a locked endpoint is
   unavailable.

@@ -60,6 +60,9 @@ public sealed class RestoreCoordinator : IDisposable
     // event instead, which is harmless by comparison.
     private static readonly TimeSpan ApplySuppressionWindow = TimeSpan.FromSeconds(2);
 
+    // Reason array reused by every manual apply (CA1861: never re-allocate).
+    private static readonly string[] ManualApplyReasons = ["manual apply"];
+
     private readonly SonarSvc.ISonarService _sonar;
     private readonly IWindowsAudioService _windows;
     private readonly SettingsService _settingsService;
@@ -74,6 +77,13 @@ public sealed class RestoreCoordinator : IDisposable
     private bool _disposed;
 
     public event Action<ProtectionStatus>? StatusChanged;
+
+    /// <summary>
+    /// Raised after the active profile was switched and persisted. UIs use it
+    /// to keep toggle checkmarks and indicators in sync regardless of which
+    /// surface (tray, settings window) performed the switch.
+    /// </summary>
+    public event Action<string>? ActiveProfileChanged;
 
     public RestoreCoordinator(
         SonarSvc.ISonarService sonar,
@@ -126,13 +136,60 @@ public sealed class RestoreCoordinator : IDisposable
     /// <summary>Manual "apply saved setup now". Bypasses debounce, suppression, and the auto-restore toggle.</summary>
     public Task RestoreNowAsync()
     {
-        return RestoreInternalAsync(new[] { "manual apply" }, forceApply: true);
+        return RestoreInternalAsync(ManualApplyReasons, forceApply: true);
     }
 
     /// <summary>
-    /// Reads live state of both domains and stores it as the locked state. If
-    /// one domain is unreachable, the other is still captured and the failure
-    /// is surfaced through status and logs.
+    /// Switches the active configuration and applies it immediately. Bypasses
+    /// debounce, suppression, and the auto-restore toggle: an explicit toggle
+    /// is user intent, and the apply opens the post-apply suppression window
+    /// so the writes' own event echo is absorbed. The switch is persisted
+    /// first, so even if the apply fails, auto-restore keeps enforcing the
+    /// newly selected profile and later hints retry it.
+    /// </summary>
+    public async Task ActivateProfileAsync(string profileId)
+    {
+        var cancellationToken = _lifetime.Token;
+        string reason;
+
+        await _restoreGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var load = await _settingsService.LoadAsync(cancellationToken).ConfigureAwait(false);
+            var settings = load.Settings ?? new AppSettings();
+
+            if (!settings.Profiles.TryGetValue(profileId, out var profile))
+            {
+                Report(new ProtectionStatus(ProtectionState.Degraded,
+                    $"Unknown configuration '{profileId}' - settings may have been edited by hand"));
+                return;
+            }
+
+            settings.ActiveProfileId = profileId;
+            await _settingsService.SaveAsync(settings, cancellationToken).ConfigureAwait(false);
+            _logger.LogInformation("Active profile switched to {ProfileId} ({Name})", profileId, profile.Name);
+            reason = $"profile switch to {profile.Name}";
+
+            // Fire while still inside the gate: handlers only update visuals,
+            // and firing before the apply means the UI already reflects the
+            // persisted state even if the apply then fails.
+            ActiveProfileChanged?.Invoke(profileId);
+        }
+        finally
+        {
+            _restoreGate.Release();
+        }
+
+        // Outside the gate because RestoreInternalAsync takes it itself. A
+        // concurrent hint pass slipping in between release and re-acquire is
+        // harmless: settings already hold the new active profile on disk.
+        await RestoreInternalAsync(new[] { reason }, forceApply: true).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Reads live state of both domains and stores it as the active profile's
+    /// locked state. If one domain is unreachable, the other is still captured
+    /// and the failure is surfaced through status and logs.
     /// </summary>
     public async Task CaptureCurrentStateAsync()
     {
@@ -145,6 +202,8 @@ public sealed class RestoreCoordinator : IDisposable
             var load = await _settingsService.LoadAsync(cancellationToken).ConfigureAwait(false);
             var settings = load.Settings ?? new AppSettings();
 
+            var profile = EnsureActiveProfile(settings);
+
             var sonar = await TryReadSonarSnapshotAsync(cancellationToken).ConfigureAwait(false);
             var windows = await TryReadWindowsSnapshotAsync(cancellationToken).ConfigureAwait(false);
             if (sonar.Snapshot is null && windows is null)
@@ -156,7 +215,7 @@ public sealed class RestoreCoordinator : IDisposable
 
             if (sonar.Snapshot is not null)
             {
-                settings.Sonar = new SonarDefaultsSettings
+                profile.Sonar = new SonarDefaultsSettings
                 {
                     Channels = sonar.Snapshot.Devices
                         .Where(kvp => SettableChannels.All.Contains(kvp.Key) && !string.IsNullOrEmpty(kvp.Value))
@@ -166,7 +225,7 @@ public sealed class RestoreCoordinator : IDisposable
 
             if (windows is not null)
             {
-                settings.Windows = new WindowsDefaultsSettings
+                profile.Windows = new WindowsDefaultsSettings
                 {
                     PlaybackConsoleId = windows.CurrentDefaults.GetValueOrDefault(new AudioRoleKey(AudioDirection.Render, DefaultRole.Console)),
                     PlaybackMultimediaId = windows.CurrentDefaults.GetValueOrDefault(new AudioRoleKey(AudioDirection.Render, DefaultRole.Multimedia)),
@@ -179,7 +238,8 @@ public sealed class RestoreCoordinator : IDisposable
 
             await CacheDeviceNamesAsync(settings, cancellationToken).ConfigureAwait(false);
             await _settingsService.SaveAsync(settings, cancellationToken).ConfigureAwait(false);
-            Report(new ProtectionStatus(ProtectionState.Protected, "Captured current devices as locked state"));
+            Report(new ProtectionStatus(ProtectionState.Protected,
+                $"Captured current devices for {ActiveProfileDisplayName(settings)}"));
         }
         finally
         {
@@ -206,39 +266,41 @@ public sealed class RestoreCoordinator : IDisposable
                         return;
                     }
 
-                reasons = _pendingReasons.ToArray();
-                _pendingReasons.Clear();
-            }
+                    reasons = _pendingReasons.ToArray();
+                    _pendingReasons.Clear();
+                }
 
-            // A queued hint can execute inside the post-apply suppression
-            // window: it may have been enqueued before the apply set the
-            // window, and the drain only runs it ~750ms later. Running it now
-            // re-reads state before the backend settled and re-writes the
-            // correction we just applied - the echo double-write observed in
-            // logs that destabilized Sonar's channels. Defer until the
-            // window ends instead.
-            TimeSpan suppressionRemaining = _suppressUntilUtc - DateTimeOffset.UtcNow;
-            if (suppressionRemaining > TimeSpan.Zero)
-            {
-                _logger.LogDebug(
-                    "Queued restore deferred {Ms}ms behind the post-apply suppression window",
-                    (int)suppressionRemaining.TotalMilliseconds);
-                await Task.Delay(suppressionRemaining, _lifetime.Token).ConfigureAwait(false);
-            }
+                // A queued hint can execute inside the post-apply suppression
+                // window: it may have been enqueued before the apply set the
+                // window, and the drain only runs it ~750ms later. Running it now
+                // re-reads state before the backend settled and re-writes the
+                // correction we just applied - the echo double-write observed in
+                // logs that destabilized Sonar's channels. Defer until the
+                // window ends instead.
+                TimeSpan suppressionRemaining = _suppressUntilUtc - DateTimeOffset.UtcNow;
+                if (suppressionRemaining > TimeSpan.Zero)
+                {
+                    _logger.LogDebug(
+                        "Queued restore deferred {Ms}ms behind the post-apply suppression window",
+                        (int)suppressionRemaining.TotalMilliseconds);
+                    await Task.Delay(suppressionRemaining, _lifetime.Token).ConfigureAwait(false);
+                }
 
-            await RestoreInternalAsync(reasons, forceApply: false).ConfigureAwait(false);
+                await RestoreInternalAsync(reasons, forceApply: false).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException)
         {
-            lock (_sync) { _drainScheduled = false; }
+            lock (_sync)
+            { _drainScheduled = false; }
         }
         catch (Exception ex)
         {
             // A crash here must never take the tray app down (agents.md):
             // log, reschedule cleanly, and let the next hint retry.
             _logger.LogError(ex, "Restore drain loop failed");
-            lock (_sync) { _drainScheduled = false; }
+            lock (_sync)
+            { _drainScheduled = false; }
         }
     }
 
@@ -257,6 +319,16 @@ public sealed class RestoreCoordinator : IDisposable
             if (!forceApply && !settings.AutoRestoreEnabled)
             {
                 Report(new ProtectionStatus(ProtectionState.Disabled, "Auto-restore is off"));
+                return;
+            }
+
+            if (!settings.HasLockedState)
+            {
+                // An empty active profile plans no writes at all; reporting
+                // "devices match locked state" would hide the real situation.
+                // Tell the user what to do instead.
+                Report(new ProtectionStatus(ProtectionState.Disabled,
+                    $"No saved setup for {ActiveProfileDisplayName(settings)} yet - capture it from the tray or Settings"));
                 return;
             }
 
@@ -335,6 +407,26 @@ public sealed class RestoreCoordinator : IDisposable
             _restoreGate.Release();
         }
     }
+
+    /// <summary>
+    /// Returns the active profile, recreating the well-known entry when it is
+    /// missing (first run before any save, or a hand-edited file). Capture
+    /// always has a target this way. An unknown active profile ID - only
+    /// possible through hand editing - normalizes to headphones so decisions
+    /// always run on a profile the toggle can reach.
+    /// </summary>
+    private static ProfileSettings EnsureActiveProfile(AppSettings settings)
+    {
+        if (!ProfileIds.IsKnown(settings.ActiveProfileId))
+        {
+            settings.ActiveProfileId = ProfileIds.Headphones;
+        }
+
+        return settings.GetOrCreateProfile(settings.ActiveProfileId);
+    }
+
+    private static string ActiveProfileDisplayName(AppSettings settings) =>
+        settings.ActiveProfile?.Name is { Length: > 0 } name ? name : ProfileIds.DisplayNameFor(settings.ActiveProfileId);
 
     private async Task<(SonarSnapshot? Snapshot, ProtectionStatus? Problem)> TryReadSonarSnapshotAsync(
         CancellationToken cancellationToken)
@@ -445,7 +537,7 @@ public sealed class RestoreCoordinator : IDisposable
         }
     }
 
-    private ProtectionStatus BuildOutcomeStatus(
+    private static ProtectionStatus BuildOutcomeStatus(
         RestorePlan plan,
         int applied,
         AppSettings settings,
@@ -460,13 +552,14 @@ public sealed class RestoreCoordinator : IDisposable
                 $"Saved device unavailable: {settings.DisplayNameFor(first.DeviceId)}{extra}. Waiting for it to return.");
         }
 
+        string profile = $" ({ActiveProfileDisplayName(settings)})";
         if (applied > 0)
         {
-            return new ProtectionStatus(ProtectionState.Protected, $"Restored {applied} setting(s) to locked state");
+            return new ProtectionStatus(ProtectionState.Protected, $"Restored {applied} setting(s) to locked state{profile}");
         }
 
         return sonarProblem
-            ?? new ProtectionStatus(ProtectionState.Protected, "Devices match locked state");
+            ?? new ProtectionStatus(ProtectionState.Protected, $"Devices match locked state{profile}");
     }
 
     private void Report(ProtectionStatus status)

@@ -22,14 +22,18 @@ public static class RestoreEngine
     };
 
     /// <summary>
-    /// Compares saved state against live snapshots and produces a plan.
-    /// A null snapshot (service unreachable) simply skips that domain so a
-    /// Sonar outage never blocks Windows restore or vice versa.
+    /// Compares the active profile's saved state against live snapshots and
+    /// produces a plan. A null snapshot (service unreachable) simply skips
+    /// that domain so a Sonar outage never blocks Windows restore or vice
+    /// versa. A missing or empty active profile yields an empty plan.
     /// </summary>
     public static RestorePlan Plan(AppSettings settings, SonarSnapshot? sonar, WindowsSnapshot? windows)
     {
-        var sonarCorrections = PlanSonar(settings.Sonar, sonar, out var unavailableSonar);
-        var windowsCorrections = PlanWindows(settings.Windows, windows, out var unavailableWindows);
+        // Decisions always go through the stable profile ID; the display name
+        // is not involved.
+        var profile = settings.ActiveProfile;
+        var sonarCorrections = PlanSonar(profile?.Sonar, sonar, out var unavailableSonar);
+        var windowsCorrections = PlanWindows(profile?.Windows, windows, out var unavailableWindows);
 
         // The same physical device can be locked to several roles (e.g.
         // Console and Multimedia); report it once, not once per role.
@@ -44,7 +48,7 @@ public static class RestoreEngine
         return new RestorePlan(sonarCorrections, windowsCorrections, unavailable);
     }
 
-    private static IReadOnlyList<SonarCorrection> PlanSonar(
+    private static List<SonarCorrection> PlanSonar(
         SonarDefaultsSettings? saved,
         SonarSnapshot? current,
         out List<UnavailableDevice> unavailable)
@@ -114,7 +118,7 @@ public static class RestoreEngine
         return corrections;
     }
 
-    private static IReadOnlyList<WindowsCorrection> PlanWindows(
+    private static List<WindowsCorrection> PlanWindows(
         WindowsDefaultsSettings? saved,
         WindowsSnapshot? current,
         out List<UnavailableDevice> unavailable)

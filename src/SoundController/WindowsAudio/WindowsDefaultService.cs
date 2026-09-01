@@ -158,7 +158,7 @@ public sealed class WindowsDefaultService : IWindowsAudioService
         }
     }
 
-    private IReadOnlySet<string> ListActiveEndpointIds(AudioDirection direction)
+    private HashSet<string> ListActiveEndpointIds(AudioDirection direction)
     {
         var ids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var device in _enumerator.EnumerateAudioEndPoints(ToDataFlow(direction), DeviceState.Active))

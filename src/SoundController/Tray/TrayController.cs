@@ -30,6 +30,13 @@ public sealed class TrayController : IDisposable
     private MenuItem _statusItem = null!;
     private MenuItem _autoRestoreItem = null!;
     private MenuItem _autostartItem = null!;
+    private readonly Dictionary<string, MenuItem> _profileItems = new(StringComparer.Ordinal);
+    private string _activeProfileId = ProfileIds.Headphones;
+
+    // Latest saved settings snapshot, used to keep menu checkmarks current
+    // without disk I/O on the UI thread; seeded at Initialize and refreshed
+    // through SettingsService.Saved.
+    private AppSettings? _lastSettings;
     private readonly List<IntPtr> _liveIconHandles = new();
 
     /// <summary>Raised when the user asks for the settings window.</summary>
@@ -58,12 +65,15 @@ public sealed class TrayController : IDisposable
         _logger = logger;
 
         _coordinator.StatusChanged += OnStatusChanged;
+        _coordinator.ActiveProfileChanged += OnActiveProfileChanged;
+        _settingsService.Saved += OnSettingsSaved;
     }
 
     public void Initialize(AppSettings settings)
     {
         _icon.ToolTipText = "SoundController - starting...";
         SetIcon(ProtectionState.Restoring);
+        _lastSettings = settings;
 
         _statusItem = new MenuItem { Header = "Starting...", IsEnabled = false };
         _autoRestoreItem = new MenuItem
@@ -83,6 +93,15 @@ public sealed class TrayController : IDisposable
         };
         _autostartItem.Click += OnAutostartToggled;
 
+        // Radio-style profile toggle: exactly one of the two configurations is
+        // active. Mutual exclusion is maintained manually (SyncProfileChecks)
+        // so behavior does not depend on WPF group semantics. The header is a
+        // display label; the stable profile ID rides in Tag.
+        _activeProfileId = settings.ActiveProfileId;
+        _profileItems[ProfileIds.Headphones] = CreateProfileItem(ProfileIds.Headphones);
+        _profileItems[ProfileIds.Speakers] = CreateProfileItem(ProfileIds.Speakers);
+        SyncProfileChecks();
+
         var captureItem = CreateItem("Capture current setup", OnCaptureClicked);
         var applyItem = CreateItem("Apply saved setup now", OnApplyClicked);
         var settingsItem = CreateItem("Settings...", OnSettingsClicked);
@@ -96,6 +115,9 @@ public sealed class TrayController : IDisposable
         menu.Items.Add(_autoRestoreItem);
         menu.Items.Add(_autostartItem);
         menu.Items.Add(new Separator());
+        menu.Items.Add(_profileItems[ProfileIds.Headphones]);
+        menu.Items.Add(_profileItems[ProfileIds.Speakers]);
+        menu.Items.Add(new Separator());
         menu.Items.Add(captureItem);
         menu.Items.Add(applyItem);
         menu.Items.Add(new Separator());
@@ -107,6 +129,20 @@ public sealed class TrayController : IDisposable
 
         _icon.ContextMenu = menu;
         ApplyMenuTheme(menu);
+
+        // The menu is built once; re-sync checkable state every time it
+        // opens. Autostart comes from the registry (source of truth), the
+        // rest from the last saved snapshot - so changes made in the
+        // settings window or elsewhere are reflected even without a Saved
+        // notification reaching this menu.
+        menu.Opened += (_, _) =>
+        {
+            _autoRestoreItem.IsChecked = _lastSettings?.AutoRestoreEnabled ?? _autoRestoreItem.IsChecked;
+            _autostartItem.IsChecked = _autostart.IsEnabled();
+            _activeProfileId = _lastSettings?.ActiveProfileId ?? _activeProfileId;
+            SyncProfileChecks();
+        };
+
         _icon.TrayLeftMouseUp += (_, _) => OpenSettingsRequested?.Invoke();
         _icon.Visibility = Visibility.Visible;
 
@@ -145,6 +181,18 @@ public sealed class TrayController : IDisposable
     {
         var item = new MenuItem { Header = header };
         item.Click += onClick;
+        return item;
+    }
+
+    private MenuItem CreateProfileItem(string profileId)
+    {
+        var item = new MenuItem
+        {
+            Header = ProfileIds.DisplayNameFor(profileId),
+            IsCheckable = true,
+            Tag = profileId,
+        };
+        item.Click += OnProfileClicked;
         return item;
     }
 
@@ -215,6 +263,66 @@ public sealed class TrayController : IDisposable
         {
             _logger.LogError(ex, "Toggling autostart failed");
             _statusItem.Header = "Autostart change failed - see logs";
+        }
+    }
+
+    private async void OnProfileClicked(object sender, RoutedEventArgs e)
+    {
+        if (sender is not MenuItem item || item.Tag is not string profileId)
+        {
+            return;
+        }
+
+        try
+        {
+            // Persisting the switch plus a forced apply lives in the
+            // coordinator; the resulting ActiveProfileChanged re-syncs the
+            // checkmarks (also covering switches made elsewhere).
+            await _coordinator.ActivateProfileAsync(profileId).ConfigureAwait(true);
+        }
+        catch (OperationCanceledException)
+        {
+            // Shutdown raced the click; nothing to report.
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Switching active profile to {ProfileId} failed", profileId);
+            _statusItem.Header = "Profile switch failed - see logs";
+            // The click checked the item, but the switch did not happen:
+            // restore the visual to the actually active profile.
+            SyncProfileChecks();
+        }
+    }
+
+    private void OnActiveProfileChanged(string profileId)
+    {
+        // Fired from background continuations; marshal the visual update.
+        Application.Current?.Dispatcher.BeginInvoke(() =>
+        {
+            _activeProfileId = profileId;
+            SyncProfileChecks();
+        });
+    }
+
+    private void OnSettingsSaved(AppSettings settings)
+    {
+        // A save anywhere (tray toggles, settings window, coordinator) keeps
+        // the menu checkmarks in sync with what is actually persisted.
+        _lastSettings = settings;
+        Application.Current?.Dispatcher.BeginInvoke(() =>
+        {
+            _autoRestoreItem.IsChecked = settings.AutoRestoreEnabled;
+            _autostartItem.IsChecked = settings.StartWithWindows;
+            _activeProfileId = settings.ActiveProfileId;
+            SyncProfileChecks();
+        });
+    }
+
+    private void SyncProfileChecks()
+    {
+        foreach (var (profileId, item) in _profileItems)
+        {
+            item.IsChecked = profileId == _activeProfileId;
         }
     }
 
@@ -344,6 +452,8 @@ public sealed class TrayController : IDisposable
     public void Dispose()
     {
         _coordinator.StatusChanged -= OnStatusChanged;
+        _coordinator.ActiveProfileChanged -= OnActiveProfileChanged;
+        _settingsService.Saved -= OnSettingsSaved;
         _icon.Dispose();
 
         // HICONs are only safe to free after the tray icon is gone.

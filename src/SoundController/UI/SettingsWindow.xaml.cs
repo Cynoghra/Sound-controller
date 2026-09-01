@@ -37,6 +37,10 @@ public partial class SettingsWindow : Window
     // combo could wipe its saved lock on Save/Apply.
     private bool _suppressSelectionTracking;
 
+    // Which profile the combos currently edit. Null until the first load
+    // follows the active profile; afterwards only the radio pair changes it.
+    private string? _editTargetProfileId;
+
     public SettingsWindow(
         SettingsService settingsService,
         IWindowsAudioService windowsAudio,
@@ -59,8 +63,15 @@ public partial class SettingsWindow : Window
         }
 
         Loaded += OnLoaded;
-        Closed += (_, _) => _coordinator.StatusChanged -= OnCoordinatorStatusChanged;
+        Closed += (_, _) =>
+        {
+            _coordinator.StatusChanged -= OnCoordinatorStatusChanged;
+            _coordinator.ActiveProfileChanged -= OnCoordinatorActiveProfileChanged;
+            _settingsService.Saved -= OnSettingsSaved;
+        };
         _coordinator.StatusChanged += OnCoordinatorStatusChanged;
+        _coordinator.ActiveProfileChanged += OnCoordinatorActiveProfileChanged;
+        _settingsService.Saved += OnSettingsSaved;
     }
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
@@ -78,6 +89,12 @@ public partial class SettingsWindow : Window
             var settings = load.Settings ?? new AppSettings();
             AutoRestoreCheckBox.IsChecked = settings.AutoRestoreEnabled;
             StartWithWindowsCheckBox.IsChecked = _autostart.IsEnabled();
+
+            // First load follows the active profile; later loads keep whatever
+            // edit target the radio pair selected.
+            _editTargetProfileId ??= ProfileIds.IsKnown(settings.ActiveProfileId)
+                ? settings.ActiveProfileId
+                : ProfileIds.Headphones;
 
             var loadPlayback = _windowsAudio.ListEndpointsAsync(AudioDirection.Render, CancellationToken.None);
             var loadRecording = _windowsAudio.ListEndpointsAsync(AudioDirection.Capture, CancellationToken.None);
@@ -97,6 +114,19 @@ public partial class SettingsWindow : Window
             List<string> missing;
             try
             {
+                var editTarget = settings.Profiles.TryGetValue(_editTargetProfileId, out var targetProfile)
+                    ? targetProfile
+                    : null;
+
+                string activeName = settings.ActiveProfile?.Name is { Length: > 0 } activeLabel
+                    ? activeLabel
+                    : ProfileIds.DisplayNameFor(settings.ActiveProfileId);
+                HeadphonesRadioButton.IsChecked = _editTargetProfileId == ProfileIds.Headphones;
+                SpeakersRadioButton.IsChecked = _editTargetProfileId == ProfileIds.Speakers;
+                ActiveProfileText.Text = $"Active: {activeName}";
+                MakeActiveButton.IsEnabled =
+                    !string.Equals(_editTargetProfileId, settings.ActiveProfileId, StringComparison.Ordinal);
+
                 SetCombo(PlaybackDefaultComboBox, playbackOptions);
                 SetCombo(PlaybackCommsComboBox, playbackOptions);
                 SetCombo(RecordingDefaultComboBox, recordingOptions);
@@ -108,21 +138,22 @@ public partial class SettingsWindow : Window
                 SetCombo(MicComboBox, sonarCapture);
 
                 missing = new List<string>();
-                if (settings.Windows is not null)
+                if (editTarget?.Windows is not null)
                 {
-                    TrackMissing(missing, settings, Select(PlaybackDefaultComboBox, settings.Windows.PlaybackConsoleId ?? settings.Windows.PlaybackMultimediaId), "playback default");
-                    TrackMissing(missing, settings, Select(PlaybackCommsComboBox, settings.Windows.PlaybackCommunicationsId), "playback communications");
-                    TrackMissing(missing, settings, Select(RecordingDefaultComboBox, settings.Windows.RecordingConsoleId ?? settings.Windows.RecordingMultimediaId), "recording default");
-                    TrackMissing(missing, settings, Select(RecordingCommsComboBox, settings.Windows.RecordingCommunicationsId), "recording communications");
+                    var windows = editTarget.Windows;
+                    TrackMissing(missing, Select(PlaybackDefaultComboBox, windows.PlaybackConsoleId ?? windows.PlaybackMultimediaId), "playback default");
+                    TrackMissing(missing, Select(PlaybackCommsComboBox, windows.PlaybackCommunicationsId), "playback communications");
+                    TrackMissing(missing, Select(RecordingDefaultComboBox, windows.RecordingConsoleId ?? windows.RecordingMultimediaId), "recording default");
+                    TrackMissing(missing, Select(RecordingCommsComboBox, windows.RecordingCommunicationsId), "recording communications");
                 }
 
-                if (settings.Sonar is not null)
+                if (editTarget?.Sonar is not null)
                 {
-                    TrackMissing(missing, settings, Select(GameComboBox, ChannelId(settings, "Game")), "Sonar Game");
-                    TrackMissing(missing, settings, Select(ChatComboBox, ChannelId(settings, "Chat")), "Sonar Chat");
-                    TrackMissing(missing, settings, Select(MediaComboBox, ChannelId(settings, "Media")), "Sonar Media");
-                    TrackMissing(missing, settings, Select(AuxComboBox, ChannelId(settings, "Aux")), "Sonar Aux");
-                    TrackMissing(missing, settings, Select(MicComboBox, ChannelId(settings, "Mic")), "Sonar Mic");
+                    TrackMissing(missing, Select(GameComboBox, ChannelId(editTarget, "Game")), "Sonar Game");
+                    TrackMissing(missing, Select(ChatComboBox, ChannelId(editTarget, "Chat")), "Sonar Chat");
+                    TrackMissing(missing, Select(MediaComboBox, ChannelId(editTarget, "Media")), "Sonar Media");
+                    TrackMissing(missing, Select(AuxComboBox, ChannelId(editTarget, "Aux")), "Sonar Aux");
+                    TrackMissing(missing, Select(MicComboBox, ChannelId(editTarget, "Mic")), "Sonar Mic");
                 }
             }
             finally
@@ -137,7 +168,8 @@ public partial class SettingsWindow : Window
                     string.Join("; ", missing));
             }
 
-            string readyMessage = preserveSelections ? "Refreshed from current state." : "Ready.";
+            string readyMessage = (preserveSelections ? "Refreshed from current state." : "Ready.") +
+                $" Editing {ProfileIds.DisplayNameFor(_editTargetProfileId)} profile.";
             StatusText.Text = missing.Count > 0
                 ? readyMessage + " Saved device(s) not in the current list - locks kept: " + string.Join(", ", missing) + "."
                 : readyMessage;
@@ -157,7 +189,7 @@ public partial class SettingsWindow : Window
         }
     }
 
-    private void TrackMissing(List<string> missing, AppSettings settings, bool selected, string slotLabel)
+    private static void TrackMissing(List<string> missing, bool selected, string slotLabel)
     {
         // selected=false only when a saved device exists but was not offered
         // by the current device list (e.g. it is unplugged right now).
@@ -167,8 +199,8 @@ public partial class SettingsWindow : Window
         }
     }
 
-    private static string? ChannelId(AppSettings settings, string channel) =>
-        settings.Sonar?.Channels.TryGetValue(channel, out var id) == true ? id : null;
+    private static string? ChannelId(ProfileSettings? profile, string channel) =>
+        profile?.Sonar?.Channels.TryGetValue(channel, out var id) == true ? id : null;
 
     private static List<ComboItem> BuildWindowsOptions(IReadOnlyList<AudioEndpointOption> endpoints) =>
         new List<ComboItem> { NotLockedItem }.Concat(endpoints.Select(d => new ComboItem(d.Id, d.Name))).ToList();
@@ -219,9 +251,11 @@ public partial class SettingsWindow : Window
         try
         {
             SetBusy(true, "Capturing current state...");
+            // Capture always writes the live devices into the ACTIVE profile
+            // (the one auto-restore enforces); the coordinator's status names it.
             await _coordinator.CaptureCurrentStateAsync().ConfigureAwait(true);
             await RefreshAsync(preserveSelections: true).ConfigureAwait(true);
-            StatusText.Text = "Current devices captured as locked state.";
+            StatusText.Text = "Current devices captured into the active profile.";
         }
         catch (Exception ex)
         {
@@ -232,6 +266,84 @@ public partial class SettingsWindow : Window
         {
             SetBusy(false);
         }
+    }
+
+    private async void OnAutoRestoreToggleClicked(object sender, RoutedEventArgs e)
+    {
+        // Click only fires on user interaction, so IsChecked here is the
+        // freshly toggled value; programmatic updates below cannot re-enter.
+        bool enable = AutoRestoreCheckBox.IsChecked == true;
+        try
+        {
+            SetBusy(true, enable ? "Enabling auto-restore..." : "Disabling auto-restore...");
+
+            var load = await _settingsService.LoadAsync().ConfigureAwait(true);
+            var settings = load.Settings ?? new AppSettings();
+            settings.AutoRestoreEnabled = enable;
+            await _settingsService.SaveAsync(settings).ConfigureAwait(true);
+            _logger.LogInformation("Auto-restore toggled to {Enabled} from settings window", enable);
+
+            if (enable)
+            {
+                // Re-check immediately so the user sees protection resume.
+                _coordinator.RequestRestore("auto-restore enabled");
+                StatusText.Text = "Auto-restore enabled.";
+            }
+            else
+            {
+                StatusText.Text = "Auto-restore disabled.";
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Toggling auto-restore failed from settings window");
+            StatusText.Text = "Auto-restore change failed - see logs.";
+            AutoRestoreCheckBox.IsChecked = !enable;
+        }
+        finally
+        {
+            SetBusy(false);
+        }
+    }
+
+    private async void OnStartWithWindowsToggleClicked(object sender, RoutedEventArgs e)
+    {
+        bool enable = StartWithWindowsCheckBox.IsChecked == true;
+        try
+        {
+            SetBusy(true, enable ? "Enabling start with Windows..." : "Disabling start with Windows...");
+
+            // The registry is the source of truth; settings only mirror it.
+            _autostart.SetEnabled(enable);
+            var load = await _settingsService.LoadAsync().ConfigureAwait(true);
+            var settings = load.Settings ?? new AppSettings();
+            settings.StartWithWindows = enable;
+            await _settingsService.SaveAsync(settings).ConfigureAwait(true);
+            StatusText.Text = enable ? "Start with Windows enabled." : "Start with Windows disabled.";
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Toggling autostart failed from settings window");
+            StatusText.Text = "Start with Windows change failed - see logs.";
+            // Reflect what actually happened instead of the failed intent.
+            StartWithWindowsCheckBox.IsChecked = _autostart.IsEnabled();
+        }
+        finally
+        {
+            SetBusy(false);
+        }
+    }
+
+    private void OnSettingsSaved(AppSettings settings)
+    {
+        // A toggle saved anywhere (tray, coordinator, this window) keeps the
+        // checkboxes current while the window is open. Programmatic IsChecked
+        // updates do not raise Click, so this cannot re-trigger the handlers.
+        Dispatcher.BeginInvoke(() =>
+        {
+            AutoRestoreCheckBox.IsChecked = settings.AutoRestoreEnabled;
+            StartWithWindowsCheckBox.IsChecked = settings.StartWithWindows;
+        });
     }
 
     private async void OnApplyClicked(object sender, RoutedEventArgs e)
@@ -279,38 +391,39 @@ public partial class SettingsWindow : Window
         var load = await _settingsService.LoadAsync().ConfigureAwait(true);
         var settings = load.Settings ?? new AppSettings();
 
-        settings.AutoRestoreEnabled = AutoRestoreCheckBox.IsChecked == true;
-
-        bool wantAutostart = StartWithWindowsCheckBox.IsChecked == true;
-        if (wantAutostart != _autostart.IsEnabled())
-        {
-            _autostart.SetEnabled(wantAutostart);
-        }
+        // Auto-restore and Start with Windows are NOT written here: both
+        // checkboxes apply immediately on click (and sync through
+        // SettingsService.Saved), so reading them at Save time would replay
+        // stale values over changes made elsewhere - the tray/settings
+        // disconnect. Save only concerns the device lists.
 
         // Merge semantics (LockedSlotMerge): slots the user did not touch
         // keep their previous locked value, so a missing device in the list
         // can never silently wipe a lock. "(not locked)" only clears a slot
-        // when the user deliberately picked it.
-        settings.Windows = new WindowsDefaultsSettings
+        // when the user deliberately picked it. Previous values come from the
+        // profile being edited, so each configuration merges independently.
+        var editTarget = settings.GetOrCreateProfile(_editTargetProfileId ?? ProfileIds.Headphones);
+
+        editTarget.Windows = new WindowsDefaultsSettings
         {
             // "Default" writes both Console and Multimedia; see XAML comment.
-            PlaybackConsoleId = ResolveSlot(settings.Windows?.PlaybackConsoleId, PlaybackDefaultComboBox),
-            PlaybackMultimediaId = ResolveSlot(settings.Windows?.PlaybackMultimediaId, PlaybackDefaultComboBox),
-            PlaybackCommunicationsId = ResolveSlot(settings.Windows?.PlaybackCommunicationsId, PlaybackCommsComboBox),
-            RecordingConsoleId = ResolveSlot(settings.Windows?.RecordingConsoleId, RecordingDefaultComboBox),
-            RecordingMultimediaId = ResolveSlot(settings.Windows?.RecordingMultimediaId, RecordingDefaultComboBox),
-            RecordingCommunicationsId = ResolveSlot(settings.Windows?.RecordingCommunicationsId, RecordingCommsComboBox),
+            PlaybackConsoleId = ResolveSlot(editTarget.Windows?.PlaybackConsoleId, PlaybackDefaultComboBox),
+            PlaybackMultimediaId = ResolveSlot(editTarget.Windows?.PlaybackMultimediaId, PlaybackDefaultComboBox),
+            PlaybackCommunicationsId = ResolveSlot(editTarget.Windows?.PlaybackCommunicationsId, PlaybackCommsComboBox),
+            RecordingConsoleId = ResolveSlot(editTarget.Windows?.RecordingConsoleId, RecordingDefaultComboBox),
+            RecordingMultimediaId = ResolveSlot(editTarget.Windows?.RecordingMultimediaId, RecordingDefaultComboBox),
+            RecordingCommunicationsId = ResolveSlot(editTarget.Windows?.RecordingCommunicationsId, RecordingCommsComboBox),
         };
 
-        settings.Sonar = new SonarDefaultsSettings
+        editTarget.Sonar = new SonarDefaultsSettings
         {
             Channels = new Dictionary<string, string?>(StringComparer.Ordinal)
             {
-                ["Game"] = ResolveSlot(ChannelId(settings, "Game"), GameComboBox),
-                ["Chat"] = ResolveSlot(ChannelId(settings, "Chat"), ChatComboBox),
-                ["Media"] = ResolveSlot(ChannelId(settings, "Media"), MediaComboBox),
-                ["Aux"] = ResolveSlot(ChannelId(settings, "Aux"), AuxComboBox),
-                ["Mic"] = ResolveSlot(ChannelId(settings, "Mic"), MicComboBox),
+                ["Game"] = ResolveSlot(ChannelId(editTarget, "Game"), GameComboBox),
+                ["Chat"] = ResolveSlot(ChannelId(editTarget, "Chat"), ChatComboBox),
+                ["Media"] = ResolveSlot(ChannelId(editTarget, "Media"), MediaComboBox),
+                ["Aux"] = ResolveSlot(ChannelId(editTarget, "Aux"), AuxComboBox),
+                ["Mic"] = ResolveSlot(ChannelId(editTarget, "Mic"), MicComboBox),
             },
         };
 
@@ -340,7 +453,7 @@ public partial class SettingsWindow : Window
         LockedSlotMerge.Resolve(previous, SelectedId(combo), combo.Tag is bool touched && touched);
 
     /// <summary>All combos backed by locked-device slots, in save order.</summary>
-    private IEnumerable<ComboBox> LockedCombos() => new[]
+    private ComboBox[] LockedCombos() => new[]
     {
         PlaybackDefaultComboBox, PlaybackCommsComboBox, RecordingDefaultComboBox, RecordingCommsComboBox,
         GameComboBox, ChatComboBox, MediaComboBox, AuxComboBox, MicComboBox,
@@ -356,6 +469,70 @@ public partial class SettingsWindow : Window
         }
     }
 
+    private async void OnProfileChecked(object sender, RoutedEventArgs e)
+    {
+        // Programmatic radio state during RefreshAsync must not re-trigger a
+        // refresh; also ignore events before the window is usable.
+        if (_suppressSelectionTracking || !IsLoaded)
+        {
+            return;
+        }
+
+        string profileId = ReferenceEquals(sender, HeadphonesRadioButton)
+            ? ProfileIds.Headphones
+            : ProfileIds.Speakers;
+        if (profileId == _editTargetProfileId)
+        {
+            return;
+        }
+
+        // Switching the edit target re-reads saved state for that profile;
+        // unsaved combo touches are discarded, same as any other refresh.
+        _editTargetProfileId = profileId;
+        await RefreshAsync(preserveSelections: false).ConfigureAwait(true);
+    }
+
+    private async void OnMakeActiveClicked(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            SetBusy(true, "Switching active configuration...");
+            // Save first so the switch applies what the window shows,
+            // mirroring the "Apply now" flow.
+            await SaveSettingsAsync().ConfigureAwait(true);
+            await _coordinator
+                .ActivateProfileAsync(_editTargetProfileId ?? ProfileIds.Headphones)
+                .ConfigureAwait(true);
+            // The coordinator reports the apply outcome through StatusChanged
+            // and raises ActiveProfileChanged, which refreshes the indicator
+            // and this button's enabled state.
+        }
+        catch (OperationCanceledException)
+        {
+            // Shutdown raced the click; nothing to report.
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Make active failed from settings window");
+            StatusText.Text = "Switching configuration failed - see logs.";
+        }
+        finally
+        {
+            SetBusy(false);
+        }
+    }
+
+    private void OnCoordinatorActiveProfileChanged(string profileId)
+    {
+        // Fired from background continuations; marshal the visual update.
+        Dispatcher.BeginInvoke(() =>
+        {
+            ActiveProfileText.Text = $"Active: {ProfileIds.DisplayNameFor(profileId)}";
+            MakeActiveButton.IsEnabled =
+                !string.Equals(_editTargetProfileId, profileId, StringComparison.Ordinal);
+        });
+    }
+
     private void OnCloseClicked(object sender, RoutedEventArgs e) => Close();
 
     private void SetBusy(bool busy, string? message = null)
@@ -363,6 +540,8 @@ public partial class SettingsWindow : Window
         CaptureButton.IsEnabled = !busy;
         ApplyButton.IsEnabled = !busy;
         SaveButton.IsEnabled = !busy;
+        AutoRestoreCheckBox.IsEnabled = !busy;
+        StartWithWindowsCheckBox.IsEnabled = !busy;
         if (message is not null)
         {
             StatusText.Text = message;

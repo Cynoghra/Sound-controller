@@ -18,6 +18,14 @@ manual edits later.
 - State assumptions when requirements or external API behavior are uncertain.
 - Complete implementation, verification, and documentation together whenever
   feasible. Do not leave knowingly broken intermediate states.
+- Keep `AGENTS.md`, `README.md`, and `TODO.md` current whenever a change makes
+  them stale - new behavior, new conventions, or changed workflows. Treat the
+  documentation update as part of that change, not a follow-up; when in doubt
+  whether a change affects the docs, update them.
+- Keep `CHANGELOG.md` current in the same change: add user-visible behavior
+  under an "Unreleased" heading (or the version being prepared) using the
+  Keep a Changelog format, and bump `<Version>` in `SoundController.csproj`
+  when preparing a release.
 
 ## Design Principles
 
@@ -84,6 +92,11 @@ manual edits later.
 
 ### C# Style
 
+The rules in this section are enforced mechanically: `.editorconfig` carries
+them as code-style, naming, and analyzer rules and the build fails noisily
+(`EnforceCodeStyleInBuild`, see `Directory.Build.props`) when they are
+violated. Keep this section and `.editorconfig` in sync.
+
 - Use file-scoped namespaces.
 - Use four spaces, no tabs, and Allman braces.
 - Use `PascalCase` for public members and types, `camelCase` for locals and
@@ -130,7 +143,16 @@ manual edits later.
 - The settings window merges on save: slots the user did not touch keep their
   previously locked value (`LockedSlotMerge`), so a saved device missing from
   the freshly loaded device list can never silently wipe a lock. "(not
-  locked)" only clears a slot the user deliberately picked.
+  locked)" only clears a slot the user deliberately picked. The merge runs
+  per configuration: the window saves the profile selected in its
+  Configuration section, and the other profile keeps its saved slots
+  untouched.
+- Two configurations exist ("headphones", "speakers", see `ProfileIds`), with
+  an `ActiveProfileId` pointing at the one auto-restore enforces. Profile IDs
+  are stable constants; profile names are display-only. The tray toggle and
+  the settings window both switch through
+  `RestoreCoordinator.ActivateProfileAsync`, which persists the switch and
+  applies the new profile immediately.
 
 ### XAML and UI
 
@@ -194,6 +216,17 @@ await Task.Delay(500, cancellationToken);
   snapshots and failures.
 - After code changes, run `dotnet build SoundController.sln` and
   `dotnet test SoundController.sln`.
+- Keep `dotnet build` output free of analyzer and style warnings. Roslyn
+  analyzers run at the "recommended" level and .editorconfig style rules are
+  enforced in the build (see `Directory.Build.props`); fix violations in code,
+  or demote a rule in `.editorconfig` only with a comment stating why. Verify
+  formatting with `dotnet format SoundController.sln --verify-no-changes`
+  (fix with `dotnet format SoundController.sln`).
+- After large changes (new features, schema/migration work, restore-flow
+  changes), produce a fresh single-file exe with
+  `dotnet publish src/SoundController/SoundController.csproj -c Release
+  -p:PublishProfile=FolderProfile` in the same change. Manual testing happens
+  against the published exe, so a change is not deliverable without it.
 - For integration changes, manually verify controller plug/unplug, missing
   preferred endpoints, SteelSeries GG restart, Sonar disabled, and application
   shutdown.

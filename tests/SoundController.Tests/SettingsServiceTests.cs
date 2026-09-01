@@ -42,27 +42,50 @@ public sealed class SettingsServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Save_RaisesSavedEventWithSavedSnapshot()
+    {
+        AppSettings? received = null;
+        _service.Saved += settings => received = settings;
+
+        var settings = new AppSettings { AutoRestoreEnabled = false };
+        await _service.SaveAsync(settings);
+
+        // Subscribers keep UI toggle state in sync with what was persisted;
+        // they must receive the exact saved instance, after the write.
+        Assert.Same(settings, received);
+    }
+
+    [Fact]
     public async Task SaveThenLoad_RoundTripsAllFields()
     {
         var settings = new AppSettings
         {
             AutoRestoreEnabled = false,
             StartWithWindows = true,
-            Windows = new WindowsDefaultsSettings
+            ActiveProfileId = ProfileIds.Speakers,
+            Profiles =
             {
-                PlaybackConsoleId = "render-a",
-                PlaybackMultimediaId = "render-a",
-                PlaybackCommunicationsId = "render-b",
-                RecordingCommunicationsId = "capture-a",
-            },
-            Sonar = new SonarDefaultsSettings
-            {
-                Channels = new Dictionary<string, string?>(StringComparer.Ordinal)
+                [ProfileIds.Headphones] = new ProfileSettings
                 {
-                    ["Game"] = "sonar-game",
-                    ["Mic"] = "sonar-mic",
-                    ["Aux"] = null,
+                    Name = "Headphones",
+                    Windows = new WindowsDefaultsSettings
+                    {
+                        PlaybackConsoleId = "render-a",
+                        PlaybackMultimediaId = "render-a",
+                        PlaybackCommunicationsId = "render-b",
+                        RecordingCommunicationsId = "capture-a",
+                    },
+                    Sonar = new SonarDefaultsSettings
+                    {
+                        Channels = new Dictionary<string, string?>(StringComparer.Ordinal)
+                        {
+                            ["Game"] = "sonar-game",
+                            ["Mic"] = "sonar-mic",
+                            ["Aux"] = null,
+                        },
+                    },
                 },
+                [ProfileIds.Speakers] = new ProfileSettings { Name = "Speakers" },
             },
             DeviceNames = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
@@ -77,12 +100,134 @@ public sealed class SettingsServiceTests : IDisposable
         Assert.NotNull(loaded);
         Assert.False(loaded!.AutoRestoreEnabled);
         Assert.True(loaded.StartWithWindows);
-        Assert.Equal("render-a", loaded.Windows!.PlaybackConsoleId);
-        Assert.Equal("render-b", loaded.Windows!.PlaybackCommunicationsId);
-        Assert.Equal("capture-a", loaded.Windows!.RecordingCommunicationsId);
-        Assert.Equal("sonar-game", loaded.Sonar!.Channels["Game"]);
+        Assert.Equal(ProfileIds.Speakers, loaded.ActiveProfileId);
+        Assert.Equal(2, loaded.Profiles.Count);
+
+        var headphones = loaded.Profiles[ProfileIds.Headphones];
+        Assert.Equal("render-a", headphones.Windows!.PlaybackConsoleId);
+        Assert.Equal("render-b", headphones.Windows!.PlaybackCommunicationsId);
+        Assert.Equal("capture-a", headphones.Windows!.RecordingCommunicationsId);
+        Assert.Equal("sonar-game", headphones.Sonar!.Channels["Game"]);
+
+        Assert.Equal("Speakers (Realtek)", loaded.DeviceNames["render-a"]);
+        // The active profile (Speakers) is empty, so nothing is locked.
+        Assert.False(loaded.HasLockedState);
+    }
+
+    [Fact]
+    public async Task Load_SchemaV1File_MigratesToProfiles()
+    {
+        string path = Path.Combine(_directory, "settings.json");
+        const string json = """
+            {
+              "SchemaVersion": 1,
+              "AutoRestoreEnabled": false,
+              "StartWithWindows": true,
+              "Windows": {
+                "PlaybackConsoleId": "render-a",
+                "PlaybackMultimediaId": "render-a",
+                "PlaybackCommunicationsId": "render-b",
+                "RecordingCommunicationsId": "capture-a"
+              },
+              "Sonar": {
+                "Channels": { "Game": "sonar-game", "Mic": "sonar-mic" }
+              },
+              "DeviceNames": { "render-a": "Speakers (Realtek)" }
+            }
+            """;
+        await File.WriteAllTextAsync(path, json);
+
+        var result = await _service.LoadAsync();
+
+        var loaded = result.Settings;
+        Assert.NotNull(loaded);
+        Assert.Equal(AppSettings.CurrentSchemaVersion, loaded!.SchemaVersion);
+        // The pre-upgrade configuration stays active, so enforcement is
+        // unchanged across the upgrade; only the label is new.
+        Assert.Equal(ProfileIds.Headphones, loaded.ActiveProfileId);
+        Assert.Equal(2, loaded.Profiles.Count);
+
+        var headphones = loaded.Profiles[ProfileIds.Headphones];
+        Assert.Equal("Headphones", headphones.Name);
+        Assert.Equal("render-a", headphones.Windows!.PlaybackConsoleId);
+        Assert.Equal("render-b", headphones.Windows!.PlaybackCommunicationsId);
+        Assert.Equal("capture-a", headphones.Windows!.RecordingCommunicationsId);
+        Assert.Equal("sonar-game", headphones.Sonar!.Channels["Game"]);
+
+        var speakers = loaded.Profiles[ProfileIds.Speakers];
+        Assert.Equal("Speakers", speakers.Name);
+        Assert.Null(speakers.Windows);
+        Assert.Null(speakers.Sonar);
+
+        Assert.False(loaded.AutoRestoreEnabled);
+        Assert.True(loaded.StartWithWindows);
         Assert.Equal("Speakers (Realtek)", loaded.DeviceNames["render-a"]);
         Assert.True(loaded.HasLockedState);
+    }
+
+    [Fact]
+    public async Task Load_SchemaV1FileWithoutVersionField_MigratesInsteadOfDroppingState()
+    {
+        // A hand-edited file that lost its SchemaVersion must not have its
+        // flat Windows/Sonar state silently dropped.
+        string path = Path.Combine(_directory, "settings.json");
+        const string json = """
+            {
+              "AutoRestoreEnabled": true,
+              "Windows": { "PlaybackConsoleId": "render-a", "PlaybackMultimediaId": "render-a" }
+            }
+            """;
+        await File.WriteAllTextAsync(path, json);
+
+        var result = await _service.LoadAsync();
+
+        var loaded = result.Settings;
+        Assert.NotNull(loaded);
+        Assert.Equal(AppSettings.CurrentSchemaVersion, loaded!.SchemaVersion);
+        Assert.Equal("render-a", loaded.Profiles[ProfileIds.Headphones].Windows!.PlaybackConsoleId);
+        Assert.True(loaded.HasLockedState);
+    }
+
+    [Fact]
+    public async Task Load_SchemaV2WithProfilesAndStrippedVersion_IsNotFlattened()
+    {
+        string path = Path.Combine(_directory, "settings.json");
+        const string json = """
+            {
+              "AutoRestoreEnabled": true,
+              "ActiveProfileId": "speakers",
+              "Profiles": {
+                "headphones": { "Name": "Headphones", "Windows": { "PlaybackConsoleId": "render-a" } },
+                "speakers": { "Name": "Speakers" }
+              }
+            }
+            """;
+        await File.WriteAllTextAsync(path, json);
+
+        var result = await _service.LoadAsync();
+
+        var loaded = result.Settings;
+        Assert.NotNull(loaded);
+        Assert.Equal(ProfileIds.Speakers, loaded!.ActiveProfileId);
+        Assert.Equal("render-a", loaded.Profiles[ProfileIds.Headphones].Windows!.PlaybackConsoleId);
+        Assert.Null(loaded.Profiles[ProfileIds.Speakers].Windows);
+    }
+
+    [Fact]
+    public async Task Load_SchemaV2WithoutProfiles_IsLeftUnmigrated()
+    {
+        // A fresh v2 save before any capture has no profiles and no flat
+        // state; nothing to migrate and nothing to lose.
+        string path = Path.Combine(_directory, "settings.json");
+        await File.WriteAllTextAsync(path, """{ "SchemaVersion": 2, "AutoRestoreEnabled": false }""");
+
+        var result = await _service.LoadAsync();
+
+        var loaded = result.Settings;
+        Assert.NotNull(loaded);
+        Assert.False(loaded!.AutoRestoreEnabled);
+        Assert.Empty(loaded.Profiles);
+        Assert.False(loaded.HasLockedState);
     }
 
     [Fact]

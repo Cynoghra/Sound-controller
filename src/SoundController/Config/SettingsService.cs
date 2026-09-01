@@ -42,6 +42,15 @@ public sealed class SettingsService
     private readonly string _settingsDirectory;
     private readonly ILogger<SettingsService> _logger;
 
+    /// <summary>
+    /// Raised after each successful save with the saved snapshot. UI surfaces
+    /// use it to keep toggle-style controls in sync no matter which surface
+    /// (tray, settings window, coordinator) performed the save. Handlers must
+    /// be quick and marshal their own visual updates; the event fires on the
+    /// caller's thread.
+    /// </summary>
+    public event Action<AppSettings>? Saved;
+
     public SettingsService(ILogger<SettingsService> logger)
         // Settings live under the user's profile, never beside the executable,
         // so a Program Files install still works without write access.
@@ -111,9 +120,57 @@ public sealed class SettingsService
             return new SettingsLoadResult(null, failure);
         }
 
-        // Future migrations go here, each bumping settings.SchemaVersion forward.
+        settings = MigrateToCurrentSchema(settings, json);
+        if (settings is null)
+        {
+            return new SettingsLoadResult(null, PreserveInvalidFile("Schema 1 section could not be read for migration"));
+        }
 
         return new SettingsLoadResult(settings, null);
+    }
+
+    /// <summary>
+    /// Runs schema migrations in memory; the next save persists the current
+    /// schema and re-migrating on load is idempotent. Schema 1 kept one flat
+    /// configuration (top-level Windows/Sonar), which the current model no
+    /// longer deserializes - so a v1-shaped file (explicit version 1, or no
+    /// version field at all and no profiles) is re-read with the v1 shape
+    /// before migrating. Guarding on an empty profile list keeps a v2 file
+    /// whose version field was hand-edited away from being flattened.
+    /// Returns null when the v1 re-read fails (practically unreachable: the
+    /// document already parsed as the current model); the caller preserves
+    /// the file for diagnosis instead of silently dropping captured state.
+    /// </summary>
+    private AppSettings? MigrateToCurrentSchema(AppSettings settings, string json)
+    {
+        if (settings.SchemaVersion != 1)
+        {
+            bool hasExplicitSchemaVersion = json.Contains("SchemaVersion", StringComparison.OrdinalIgnoreCase);
+            if (hasExplicitSchemaVersion || settings.Profiles.Count > 0)
+            {
+                return settings;
+            }
+        }
+
+        try
+        {
+            AppSettingsV1? legacy = JsonSerializer.Deserialize<AppSettingsV1>(json, SerializerOptions);
+            if (legacy is null)
+            {
+                _logger.LogError("Schema 1 settings deserialized to null during migration");
+                return null;
+            }
+
+            AppSettings migrated = AppSettingsMigrations.V1ToV2(legacy);
+            _logger.LogInformation("Migrated settings from schema {From} to schema {To}",
+                legacy.SchemaVersion, AppSettings.CurrentSchemaVersion);
+            return migrated;
+        }
+        catch (JsonException ex)
+        {
+            _logger.LogError(ex, "Schema 1 settings could not be read for migration");
+            return null;
+        }
     }
 
     /// <summary>Saves settings atomically through a temp file and replace.</summary>
@@ -141,6 +198,10 @@ public sealed class SettingsService
         }
 
         _logger.LogInformation("Settings saved to {Path}", _settingsPath);
+
+        // Raised only after the file is durably replaced, so subscribers
+        // always observe persisted state.
+        Saved?.Invoke(settings);
     }
 
     private SettingsLoadFailure PreserveInvalidFile(string detail)

@@ -1,0 +1,20 @@
+<Project>
+
+  <!-- Shared build settings for every project in the solution. -->
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+
+    <!-- Roslyn analyzer configuration (see .editorconfig for per-rule
+         severities and rationale). The "recommended" analysis level promotes
+         a curated subset of CA rules (token forwarding, StringComparison,
+         dispose patterns, culture APIs) to build warnings; style rules are
+         enforced from .editorconfig. Warnings only: nothing fails a build,
+         but `dotnet build` output must stay clean. -->
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+  </PropertyGroup>
+
+</Project>

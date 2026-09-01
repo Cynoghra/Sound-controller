@@ -1,0 +1,112 @@
+# EditorConfig: https://editorconfig.org
+# Style and analyzer severities for the whole solution. Enforced at build via
+# EnforceCodeStyleInBuild (see Directory.Build.props). The C# section encodes
+# the conventions from AGENTS.md ("Coding Conventions") so they are checked
+# instead of trusted.
+
+root = true
+
+[*]
+charset = utf-8
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+[*.{json,yml,yaml,csproj,props,targets}]
+indent_size = 2
+
+# Keep Markdown line breaks and trailing-space line breaks intact.
+[*.md]
+trim_trailing_whitespace = false
+
+[*.cs]
+# --- Layout ---
+csharp_new_line_before_open_brace = all
+csharp_indent_case_contents = true
+csharp_space_after_keywords_in_control_flow_statements = true
+csharp_space_between_method_declaration_name_and_open_parenthesis = false
+csharp_preserve_single_line_statements = false
+csharp_style_prefer_braces = true:suggestion
+
+# --- Usings ---
+csharp_using_directive_placement = outside_namespace:warning
+dotnet_sort_system_directives_using_first = true:suggestion
+
+# --- Style preferences (AGENTS.md: var when the type is obvious, explicit otherwise) ---
+csharp_style_var_for_built_in_types = true:suggestion
+csharp_style_var_when_type_is_apparent = true:suggestion
+csharp_style_var_elsewhere = false:suggestion
+dotnet_style_readonly_field = true:suggestion
+dotnet_style_require_accessibility_modifiers = always:suggestion
+dotnet_style_object_initializer = true:suggestion
+dotnet_style_collection_initializer = true:suggestion
+dotnet_style_coalesce_expression = true:suggestion
+dotnet_style_null_propagation = true:suggestion
+
+# --- Namespaces (AGENTS.md hard rule) ---
+csharp_style_namespace_declarations = file_scoped:warning
+dotnet_diagnostic.IDE0130.severity = warning
+
+# --- Naming conventions (AGENTS.md: PascalCase types/public, _camelCase private fields) ---
+
+# Constants and static fields stay PascalCase (observed convention: DeviceChangeDebounce).
+dotnet_naming_rule.constants_pascal_case.severity = warning
+dotnet_naming_rule.constants_pascal_case.symbols = constant_fields
+dotnet_naming_rule.constants_pascal_case.style = pascal_case
+dotnet_naming_symbols.constant_fields.applicable_kinds = field
+dotnet_naming_symbols.constant_fields.required_modifiers = const
+dotnet_naming_style.pascal_case.capitalization = pascal_case
+
+dotnet_naming_rule.static_fields_pascal_case.severity = warning
+dotnet_naming_rule.static_fields_pascal_case.symbols = static_fields
+dotnet_naming_rule.static_fields_pascal_case.style = pascal_case
+dotnet_naming_symbols.static_fields.applicable_kinds = field
+dotnet_naming_symbols.static_fields.required_modifiers = static
+dotnet_naming_style.pascal_case.capitalization = pascal_case
+
+# Private instance fields carry the underscore prefix (_camelCase).
+dotnet_naming_rule.private_fields_underscore.severity = warning
+dotnet_naming_rule.private_fields_underscore.symbols = private_instance_fields
+dotnet_naming_rule.private_fields_underscore.style = underscore_camel_case
+dotnet_naming_symbols.private_instance_fields.applicable_kinds = field
+dotnet_naming_symbols.private_instance_fields.applicable_accessibilities = private
+dotnet_naming_style.underscore_camel_case.required_prefix = _
+dotnet_naming_style.underscore_camel_case.capitalization = camel_case
+
+# Interfaces keep the I prefix; types and public members stay PascalCase.
+dotnet_naming_rule.interfaces_i_prefix.severity = warning
+dotnet_naming_rule.interfaces_i_prefix.symbols = interfaces
+dotnet_naming_rule.interfaces_i_prefix.style = i_prefix_pascal
+dotnet_naming_symbols.interfaces.applicable_kinds = interface
+dotnet_naming_style.i_prefix_pascal.required_prefix = I
+dotnet_naming_style.i_prefix_pascal.capitalization = pascal_case
+
+dotnet_naming_rule.types_pascal_case.severity = warning
+dotnet_naming_rule.types_pascal_case.symbols = types
+dotnet_naming_rule.types_pascal_case.style = pascal_case
+dotnet_naming_symbols.types.applicable_kinds = class,struct,enum,delegate
+dotnet_naming_style.pascal_case.capitalization = pascal_case
+
+# --- Analyzer severities customized with reasons (keep beside the rule) ---
+
+# CA1848 (use LoggerMessage source generators): this app's logging goes
+# through Microsoft.Extensions.Logging with a plain file provider; the
+# LoggerMessage delegate pattern would restructure every call for a perf
+# win that is irrelevant at this app's log volume.
+dotnet_diagnostic.CA1848.severity = suggestion
+
+# IDE0005 (unnecessary using): requires GenerateDocumentationFile to detect
+# reliably; enabling it adds XML doc file side effects for little value here.
+dotnet_diagnostic.IDE0005.severity = suggestion
+
+# CA1707 (no underscores in identifiers): xUnit tests use the standard
+# Method_Scenario_Expectation naming, which depends on underscores.
+[tests/**/*.cs]
+dotnet_diagnostic.CA1707.severity = none
+
+[src/SoundController/App.xaml.cs]
+# CA1001 (own disposable fields without IDisposable): WPF instantiates App
+# itself, so it cannot be IDisposable; all disposable resources are released
+# deterministically in App.OnExit (see DisposeServices).
+dotnet_diagnostic.CA1001.severity = none

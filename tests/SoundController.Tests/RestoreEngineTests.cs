@@ -19,10 +19,13 @@ public class RestoreEngineTests
 
     private static AppSettings LockedSettings(
         Dictionary<Channel, string>? sonar = null,
-        WindowsDefaultsSettings? windows = null)
+        WindowsDefaultsSettings? windows = null,
+        string activeProfileId = ProfileIds.Headphones)
     {
-        return new AppSettings
+        var settings = new AppSettings { ActiveProfileId = activeProfileId };
+        settings.Profiles[activeProfileId] = new ProfileSettings
         {
+            Name = ProfileIds.DisplayNameFor(activeProfileId),
             Sonar = sonar is null
                 ? null
                 : new SonarDefaultsSettings
@@ -31,6 +34,7 @@ public class RestoreEngineTests
                 },
             Windows = windows,
         };
+        return settings;
     }
 
     private static SonarSnapshot SonarSnapshot(
@@ -81,7 +85,9 @@ public class RestoreEngineTests
 
         var sonar = SonarSnapshot(new Dictionary<Channel, string?>
         {
-            [Channel.Game] = Speakers, [Channel.Chat] = Headset, [Channel.Mic] = Mic,
+            [Channel.Game] = Speakers,
+            [Channel.Chat] = Headset,
+            [Channel.Mic] = Mic,
         });
         var windows = WindowsSnapshot(
             renderConsole: Speakers,
@@ -213,8 +219,10 @@ public class RestoreEngineTests
     [Fact]
     public void Plan_UnknownChannelName_IsSkipped()
     {
-        var settings = new AppSettings
+        var settings = new AppSettings { ActiveProfileId = ProfileIds.Headphones };
+        settings.Profiles[ProfileIds.Headphones] = new ProfileSettings
         {
+            Name = "Headphones",
             Sonar = new SonarDefaultsSettings
             {
                 Channels = new Dictionary<string, string?>(StringComparer.Ordinal)
@@ -252,8 +260,10 @@ public class RestoreEngineTests
         // Regression: Master is a mixer concept, not a redirection target.
         // Writing it via SetClassicDevice is rejected by Sonar's backend and
         // was observed to leave channels unchosen in the UI.
-        var settings = new AppSettings
+        var settings = new AppSettings { ActiveProfileId = ProfileIds.Headphones };
+        settings.Profiles[ProfileIds.Headphones] = new ProfileSettings
         {
+            Name = "Headphones",
             Sonar = new SonarDefaultsSettings
             {
                 Channels = new Dictionary<string, string?>(StringComparer.Ordinal)
@@ -311,5 +321,84 @@ public class RestoreEngineTests
         var correction = Assert.Single(plan.SonarCorrections);
         Assert.Equal(Channel.Mic, correction.Channel);
         Assert.Equal(Mic, correction.DesiredDeviceId);
+    }
+
+    [Fact]
+    public void Plan_UsesActiveProfile_IgnoresInactiveProfile()
+    {
+        // Headphones locks Game -> Speakers; Speakers locks Game -> Controller.
+        // Only the active profile's lock may produce a correction.
+        var settings = LockedSettings(
+            sonar: new Dictionary<Channel, string> { [Channel.Game] = Speakers },
+            activeProfileId: ProfileIds.Headphones);
+        settings.Profiles[ProfileIds.Speakers] = new ProfileSettings
+        {
+            Name = "Speakers",
+            Sonar = new SonarDefaultsSettings
+            {
+                Channels = new Dictionary<string, string?>(StringComparer.Ordinal) { ["Game"] = Controller },
+            },
+        };
+
+        var sonar = SonarSnapshot(new Dictionary<Channel, string?> { [Channel.Game] = Controller },
+            knownIds: new[] { Speakers, Controller });
+
+        var plan = RestoreEngine.Plan(settings, sonar, null);
+
+        var correction = Assert.Single(plan.SonarCorrections);
+        Assert.Equal(Speakers, correction.DesiredDeviceId);
+    }
+
+    [Fact]
+    public void Plan_UnknownActiveProfileId_ProducesEmptyPlan()
+    {
+        // A hand-edited file must not make the engine write anything; the
+        // coordinator surfaces the situation through status instead.
+        var settings = new AppSettings
+        {
+            ActiveProfileId = "bogus-profile",
+            Profiles =
+            {
+                [ProfileIds.Headphones] = new ProfileSettings
+                {
+                    Name = "Headphones",
+                    Sonar = new SonarDefaultsSettings
+                    {
+                        Channels = new Dictionary<string, string?>(StringComparer.Ordinal) { ["Game"] = Speakers },
+                    },
+                },
+            },
+        };
+        var sonar = SonarSnapshot(new Dictionary<Channel, string?> { [Channel.Game] = Controller },
+            knownIds: new[] { Speakers, Controller });
+
+        var plan = RestoreEngine.Plan(settings, sonar, null);
+
+        Assert.True(plan.RequiresNoWrites);
+        Assert.Empty(plan.Unavailable);
+    }
+
+    [Fact]
+    public void HasLockedState_ReflectsActiveProfileOnly()
+    {
+        var emptyActive = new AppSettings { ActiveProfileId = ProfileIds.Speakers };
+        emptyActive.Profiles[ProfileIds.Speakers] = new ProfileSettings { Name = "Speakers" };
+        emptyActive.Profiles[ProfileIds.Headphones] = new ProfileSettings
+        {
+            Name = "Headphones",
+            Windows = new WindowsDefaultsSettings { PlaybackConsoleId = Speakers, PlaybackMultimediaId = Speakers },
+        };
+        Assert.False(emptyActive.HasLockedState);
+
+        var capturedActive = new AppSettings { ActiveProfileId = ProfileIds.Speakers };
+        capturedActive.Profiles[ProfileIds.Speakers] = new ProfileSettings
+        {
+            Name = "Speakers",
+            Sonar = new SonarDefaultsSettings
+            {
+                Channels = new Dictionary<string, string?>(StringComparer.Ordinal) { ["Game"] = Speakers },
+            },
+        };
+        Assert.True(capturedActive.HasLockedState);
     }
 }

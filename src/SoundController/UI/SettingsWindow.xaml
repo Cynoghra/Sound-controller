@@ -10,12 +10,49 @@
         Foreground="{StaticResource TextPrimaryBrush}">
     <StackPanel Margin="14">
 
+        <!-- Toggles apply immediately on click; Save/Apply only concern the
+             device lists below. -->
         <CheckBox x:Name="AutoRestoreCheckBox"
                   Content="Auto-restore locked devices when something changes"
-                  Margin="0,0,0,6" />
+                  Margin="0,0,0,6"
+                  Click="OnAutoRestoreToggleClicked" />
         <CheckBox x:Name="StartWithWindowsCheckBox"
                   Content="Start with Windows"
-                  Margin="0,0,0,12" />
+                  Margin="0,0,0,12"
+                  Click="OnStartWithWindowsToggleClicked" />
+
+        <!-- The radio pair chooses which saved configuration the device
+             combos below EDIT; the active configuration is what auto-restore
+             enforces and what "Capture current" writes into. -->
+        <GroupBox Header="Configuration" Margin="0,0,0,12" Padding="8">
+            <StackPanel>
+                <StackPanel Orientation="Horizontal"
+                            ToolTip="Choose which saved configuration the device lists below edit.">
+                    <RadioButton x:Name="HeadphonesRadioButton"
+                                 Content="Headphones"
+                                 GroupName="EditProfile"
+                                 Margin="0,0,16,0"
+                                 Checked="OnProfileChecked" />
+                    <RadioButton x:Name="SpeakersRadioButton"
+                                 Content="Speakers"
+                                 GroupName="EditProfile"
+                                 Checked="OnProfileChecked" />
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                    <TextBlock x:Name="ActiveProfileText"
+                               Style="{StaticResource DarkTextBlockStyle}"
+                               Foreground="{StaticResource TextMutedBrush}"
+                               VerticalAlignment="Center"
+                               Text="Active: Headphones" />
+                    <Button x:Name="MakeActiveButton"
+                            Content="Make active"
+                            Padding="8,2"
+                            Margin="12,0,0,0"
+                            ToolTip="Switch to this configuration now and apply its saved devices."
+                            Click="OnMakeActiveClicked" />
+                </StackPanel>
+            </StackPanel>
+        </GroupBox>
 
         <GroupBox Header="Windows default devices" Margin="0,0,0,12" Padding="8">
             <Grid>
