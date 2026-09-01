@@ -166,6 +166,9 @@ They should explain why a decision exists, not narrate syntax.
   `TODO(StreamerMode): map personal and stream mix redirections separately`.
 - Do not leave commented-out code. Version control retains removed code.
 - Keep README instructions and `TODO.md` aligned with material behavior changes.
+- When the project adopts or starts referencing a new open-source project,
+  update the README Acknowledgments in the same change: credit it with its
+  license and whether it is a dependency or reference-only.
 
 Example of a useful comment:
 
