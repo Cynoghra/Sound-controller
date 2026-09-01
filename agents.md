@@ -2,7 +2,7 @@
 
 This file defines how coding agents should work in this repository. It also
 records project conventions so changes remain understandable to someone making
-manual edits later.
+manual edits later. 
 
 ## Working Posture
 
