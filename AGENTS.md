@@ -58,6 +58,13 @@ manual edits later.
   reason beside the configured value so it is not removed as apparent clutter.
 - The Sonar API is unofficial and can change after a GG update. Keep its use
   behind `SonarService`, parse data tolerantly, and surface actionable errors.
+- SteelSeries-NET-API 2.0.0's `Redirections.SetMicDeviceAsync` writes the
+  Streamer-mode mic passthrough (`streamRedirections/mic/...`), not the
+  Classic mic redirection (`classicRedirections/mic/...`) that
+  `GetClassicRedirectionsAsync` reports. The write succeeds silently and
+  nothing changes. Route every Classic channel - Mic included - through
+  `SetClassicDeviceAsync`; reserve `SetMicDeviceAsync` for Streamer-mode
+  work, which this build does not do.
 - NAudio exposes endpoint enumeration and notifications, but changing the
   Windows default endpoint can require a small internal Core Audio policy
   interop layer. Keep that implementation isolated in `WindowsAudio` and cover

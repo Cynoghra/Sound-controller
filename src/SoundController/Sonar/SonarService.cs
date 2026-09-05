@@ -202,16 +202,13 @@ public sealed class SonarService : ISonarService
         {
             var correction = corrections[i];
 
-            // The Mic channel uses a dedicated API in the Sonar backend; the
-            // other channels share SetClassicDevice.
-            if (correction.Channel == Channel.Mic)
-            {
-                await _client.Redirections.SetMicDeviceAsync(correction.DesiredDeviceId, cancellationToken).ConfigureAwait(false);
-            }
-            else
-            {
-                await _client.Redirections.SetClassicDeviceAsync(correction.Channel, correction.DesiredDeviceId, cancellationToken).ConfigureAwait(false);
-            }
+            // All Classic-mode channels share SetClassicDevice - including Mic.
+            // The library's SetMicDeviceAsync targets streamRedirections/mic
+            // (a Streamer-mode passthrough), which never changes the classic
+            // mic redirection read by GetClassicRedirectionsAsync; writing
+            // through it reported success while GG kept the old device. Mic is
+            // a classic redirection (key "mic"), so it belongs here too.
+            await _client.Redirections.SetClassicDeviceAsync(correction.Channel, correction.DesiredDeviceId, cancellationToken).ConfigureAwait(false);
 
             _logger.LogInformation("Restored Sonar {Channel} to {DeviceId}", correction.Channel, correction.DesiredDeviceId);
 

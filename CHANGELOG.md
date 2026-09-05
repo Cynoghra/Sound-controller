@@ -4,6 +4,18 @@ All notable changes to SoundController are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions
 follow [SemVer](https://semver.org/) while the project is pre-1.0.
 
+## [Unreleased]
+
+### Fixed
+
+- Sonar Microphone redirections are now actually applied. The library's
+  `SetMicDeviceAsync` targets a Streamer-mode endpoint
+  (`streamRedirections/mic/...`) that never changes the Classic-mode mic
+  redirection this app reads and locks, so every Mic restore reported
+  success while GG kept the previous microphone. Mic is a Classic
+  redirection like Game/Chat/Media/Aux and now goes through
+  `SetClassicDeviceAsync` (`classicRedirections/mic/...`).
+
 ## [0.1.1] - 2026-09-01
 
 ### Added
